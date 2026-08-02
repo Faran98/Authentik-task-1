@@ -10,6 +10,9 @@ import {
   hardDeleteUser,
   updateUserStatus,
   adminResetUserPassword,
+  requestPasswordChange,
+  getPasswordChangeRequests,
+  reviewPasswordChangeRequest,
   forgotPassword,
   resetPassword,
 } from '../controllers/authController.js';
@@ -21,6 +24,9 @@ router.post('/login', login);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password/:token', resetPassword);
 router.patch('/users/:userId/reset-password', adminResetUserPassword);
+router.post('/password-change-requests', requestPasswordChange);
+router.get('/password-change-requests', getPasswordChangeRequests);
+router.patch('/password-change-requests/:id/review', reviewPasswordChangeRequest);
 
 // User Management Routes
 router.get('/users/active', getActiveUsers);
