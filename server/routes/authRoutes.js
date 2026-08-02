@@ -9,6 +9,7 @@ import {
   restoreUser,
   hardDeleteUser,
   updateUserStatus,
+  adminResetUserPassword,
   forgotPassword,
   resetPassword,
 } from '../controllers/authController.js';
@@ -19,6 +20,7 @@ const router = Router();
 router.post('/login', login);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password/:token', resetPassword);
+router.patch('/users/:userId/reset-password', adminResetUserPassword);
 
 // User Management Routes
 router.get('/users/active', getActiveUsers);
