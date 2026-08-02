@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
 import { sendEmail } from '../utils/sendEmail.js';
 import { getUserStatusState } from '../utils/statusHelpers.js';
+import { validatePassword } from '../utils/passwordValidation.js';
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -135,7 +136,28 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
   });
 });
 
-// 10. Forgot Password
+// 10. Admin Reset User Password
+export const adminResetUserPassword = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  const { password } = req.body;
+
+  const validation = validatePassword(password);
+  if (!validation.valid) {
+    return res.status(400).json({ success: false, message: validation.message });
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  await User.findByIdAndUpdate(userId, { passwordHash });
+
+  res.status(200).json({ success: true, message: 'User password updated successfully!' });
+});
+
+// 11. Forgot Password
 export const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
   const user = await User.findOne({ email });
@@ -157,7 +179,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: 'Password reset link sent to email!' });
 });
 
-// 11. Reset Password
+// 12. Reset Password
 export const resetPassword = asyncHandler(async (req, res) => {
   const { token } = req.params;
   const { password } = req.body;

@@ -10,6 +10,7 @@ export const Dashboard = ({ user, onLogout }) => {
   // State for Editing User Profile
   const [editingUser, setEditingUser] = useState(null); 
   const [editFormData, setEditFormData] = useState({ name: '', email: '', status: 'active' });
+  const [passwordResetData, setPasswordResetData] = useState({ userId: '', password: '', confirmPassword: '' });
 
   const fetchData = async () => {
     try {
@@ -87,6 +88,26 @@ export const Dashboard = ({ user, onLogout }) => {
     }
   };
 
+  const handlePasswordReset = async (e) => {
+    e.preventDefault();
+    if (passwordResetData.password !== passwordResetData.confirmPassword) {
+      alert('Passwords do not match');
+      return;
+    }
+
+    try {
+      await fetchClient(`/users/${passwordResetData.userId}/reset-password`, {
+        method: 'PATCH',
+        body: { password: passwordResetData.password },
+      });
+      alert('Password updated successfully');
+      setPasswordResetData({ userId: '', password: '', confirmPassword: '' });
+      fetchData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
   return (
     <div style={{ padding: '30px', maxWidth: '1000px', margin: '0 auto', fontFamily: 'sans-serif' }}>
       
@@ -131,6 +152,24 @@ export const Dashboard = ({ user, onLogout }) => {
           Recycle Bin / Inactive ({deletedUsers.length})
         </button>
       </div>
+
+      {/* Password Reset Form */}
+      <form onSubmit={handlePasswordReset} style={{ display: 'flex', gap: '10px', marginBottom: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #ddd', flexWrap: 'wrap' }}>
+        <select
+          value={passwordResetData.userId}
+          onChange={(e) => setPasswordResetData({ ...passwordResetData, userId: e.target.value })}
+          required
+          style={{ flex: '1 1 180px', padding: '8px' }}
+        >
+          <option value="">Select a user</option>
+          {[...activeUsers, ...deletedUsers].map((user) => (
+            <option key={user._id} value={user._id}>{user.name} ({user.email})</option>
+          ))}
+        </select>
+        <input type="password" placeholder="New password" value={passwordResetData.password} onChange={(e) => setPasswordResetData({ ...passwordResetData, password: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
+        <input type="password" placeholder="Confirm password" value={passwordResetData.confirmPassword} onChange={(e) => setPasswordResetData({ ...passwordResetData, confirmPassword: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
+        <button type="submit" style={{ padding: '8px 16px', backgroundColor: '#7c3aed', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Reset Password</button>
+      </form>
 
       {/* User Table with Status & Edit Options */}
       <table border={1} cellPadding={10} style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderColor: '#ddd' }}>
