@@ -1,10 +1,12 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
+import { PasswordChangeRequest } from '../models/PasswordChangeRequest.js';
 import { sendEmail } from '../utils/sendEmail.js';
 import { getUserStatusState } from '../utils/statusHelpers.js';
 import { validatePassword } from '../utils/passwordValidation.js';
 import { canManageTarget, getVisibleUserRoleFilter, isRoleCreateAllowed } from '../utils/roleAccess.js';
+import { canRequestPasswordChange, normalizeRequestStatus } from '../utils/passwordChangeRequest.js';
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -223,6 +225,70 @@ export const adminResetUserPassword = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(userId, { passwordHash });
 
   res.status(200).json({ success: true, message: 'User password updated successfully!' });
+});
+
+export const requestPasswordChange = asyncHandler(async (req, res) => {
+  const { targetUserId, password, actorRole, requesterId } = req.body;
+
+  const validation = validatePassword(password);
+  if (!validation.valid) {
+    return res.status(400).json({ success: false, message: validation.message });
+  }
+
+  const targetUser = await User.findById(targetUserId);
+  if (!targetUser) {
+    return res.status(404).json({ success: false, message: 'Target user not found' });
+  }
+
+  if (!canRequestPasswordChange(actorRole || 'user', targetUser.role)) {
+    return res.status(403).json({ success: false, message: 'Managers can only request password changes for regular users.' });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const request = await PasswordChangeRequest.create({
+    requestedBy: requesterId,
+    targetUser: targetUserId,
+    newPassword: passwordHash,
+    status: 'Pending',
+  });
+
+  res.status(201).json({ success: true, message: 'Password change request submitted for approval.', data: request });
+});
+
+export const getPasswordChangeRequests = asyncHandler(async (_req, res) => {
+  const requests = await PasswordChangeRequest.find({ status: 'Pending' }).populate('requestedBy', 'name email role').populate('targetUser', 'name email role').lean();
+  res.status(200).json({ success: true, data: requests });
+});
+
+export const reviewPasswordChangeRequest = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { action, rejectionReason } = req.body;
+  const normalizedStatus = normalizeRequestStatus(action);
+
+  const request = await PasswordChangeRequest.findById(id);
+  if (!request) {
+    return res.status(404).json({ success: false, message: 'Request not found' });
+  }
+
+  if (normalizedStatus === 'Rejected') {
+    request.status = 'Rejected';
+    request.rejectionReason = rejectionReason || 'No reason provided.';
+    await request.save();
+    return res.status(200).json({ success: true, message: 'Password change request rejected.', data: request });
+  }
+
+  const targetUser = await User.findById(request.targetUser);
+  if (!targetUser) {
+    return res.status(404).json({ success: false, message: 'Target user not found' });
+  }
+
+  targetUser.passwordHash = request.newPassword;
+  await targetUser.save();
+  request.status = 'Approved';
+  request.rejectionReason = '';
+  await request.save();
+
+  res.status(200).json({ success: true, message: 'Password change request approved.', data: request });
 });
 
 // 11. Forgot Password

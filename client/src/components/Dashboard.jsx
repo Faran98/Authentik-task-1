@@ -11,6 +11,8 @@ export const Dashboard = ({ user, onLogout }) => {
   const [editingUser, setEditingUser] = useState(null); 
   const [editFormData, setEditFormData] = useState({ name: '', email: '', status: 'active' });
   const [passwordResetData, setPasswordResetData] = useState({ userId: '', password: '', confirmPassword: '' });
+  const [approvalRequests, setApprovalRequests] = useState([]);
+  const [approvalReview, setApprovalReview] = useState({ requestId: '', action: 'Approved', reason: '' });
 
   const fetchData = async () => {
     try {
@@ -18,6 +20,10 @@ export const Dashboard = ({ user, onLogout }) => {
       const deletedRes = await fetchClient('/users/deleted');
       setActiveUsers(activeRes?.data || []);
       setDeletedUsers(deletedRes?.data || []);
+      if (user?.role === 'admin') {
+        const requestsRes = await fetchClient('/password-change-requests');
+        setApprovalRequests(requestsRes?.data || []);
+      }
     } catch (err) {
       console.error('Data fetch error:', err.message);
     }
@@ -96,13 +102,36 @@ export const Dashboard = ({ user, onLogout }) => {
     }
 
     try {
-      await fetchClient(`/users/${passwordResetData.userId}/reset-password`, {
-        method: 'PATCH',
-        body: { password: passwordResetData.password, actorRole: user?.role },
-      });
-      alert('Password updated successfully');
+      if (user?.role === 'manager') {
+        await fetchClient('/password-change-requests', {
+          method: 'POST',
+          body: { targetUserId: passwordResetData.userId, password: passwordResetData.password, actorRole: user?.role, requesterId: user?.id },
+        });
+        alert('Password change request submitted for admin approval');
+      } else {
+        await fetchClient(`/users/${passwordResetData.userId}/reset-password`, {
+          method: 'PATCH',
+          body: { password: passwordResetData.password, actorRole: user?.role },
+        });
+        alert('Password updated successfully');
+      }
       setPasswordResetData({ userId: '', password: '', confirmPassword: '' });
       fetchData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleApproveRejectRequest = async (e) => {
+    e.preventDefault();
+    try {
+      await fetchClient(`/password-change-requests/${approvalReview.requestId}/review`, {
+        method: 'PATCH',
+        body: { action: approvalReview.action, rejectionReason: approvalReview.reason },
+      });
+      setApprovalReview({ requestId: '', action: 'Approved', reason: '' });
+      fetchData();
+      alert('Request review submitted');
     } catch (err) {
       alert(err.message);
     }
@@ -174,8 +203,50 @@ export const Dashboard = ({ user, onLogout }) => {
         </select>
         <input type="password" placeholder="New password" value={passwordResetData.password} onChange={(e) => setPasswordResetData({ ...passwordResetData, password: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
         <input type="password" placeholder="Confirm password" value={passwordResetData.confirmPassword} onChange={(e) => setPasswordResetData({ ...passwordResetData, confirmPassword: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
-        <button type="submit" style={{ padding: '8px 16px', backgroundColor: '#7c3aed', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Reset Password</button>
+        <button type="submit" style={{ padding: '8px 16px', backgroundColor: '#7c3aed', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>{user?.role === 'manager' ? 'Request Password Change' : 'Reset Password'}</button>
       </form>
+
+      {user?.role === 'admin' && approvalRequests.length > 0 && (
+        <div style={{ marginBottom: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #ddd' }}>
+          <h3 style={{ marginTop: 0 }}>Pending Password Change Requests</h3>
+          <table border={1} cellPadding={8} style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ backgroundColor: '#f3f4f6' }}>
+                <th>Requested By</th>
+                <th>Target User</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {approvalRequests.map((request) => (
+                <tr key={request._id}>
+                  <td>{request.requestedBy?.name || request.requestedBy?.email}</td>
+                  <td>{request.targetUser?.name || request.targetUser?.email}</td>
+                  <td>{request.status}</td>
+                  <td>
+                    <button onClick={() => setApprovalReview({ requestId: request._id, action: 'Approved', reason: '' })} style={{ padding: '6px 10px', backgroundColor: '#16a34a', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginRight: '8px' }}>Approve</button>
+                    <button onClick={() => setApprovalReview({ requestId: request._id, action: 'Rejected', reason: '' })} style={{ padding: '6px 10px', backgroundColor: '#dc2626', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Reject</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {approvalReview.requestId && (
+            <form onSubmit={handleApproveRejectRequest} style={{ marginTop: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <label style={{ fontWeight: 'bold' }}>Review action</label>
+              <select value={approvalReview.action} onChange={(e) => setApprovalReview({ ...approvalReview, action: e.target.value })} style={{ padding: '8px' }}>
+                <option value="Approved">Approve</option>
+                <option value="Rejected">Reject</option>
+              </select>
+              {approvalReview.action === 'Rejected' && (
+                <textarea value={approvalReview.reason} onChange={(e) => setApprovalReview({ ...approvalReview, reason: e.target.value })} placeholder="Rejection reason" style={{ minHeight: '80px', padding: '8px' }} />
+              )}
+              <button type="submit" style={{ padding: '8px 14px', alignSelf: 'flex-start', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Submit Review</button>
+            </form>
+          )}
+        </div>
+      )}
 
       {/* User Table with Status & Edit Options */}
       <table border={1} cellPadding={10} style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderColor: '#ddd' }}>
