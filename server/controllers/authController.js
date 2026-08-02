@@ -4,6 +4,7 @@ import { User } from '../models/User.js';
 import { sendEmail } from '../utils/sendEmail.js';
 import { getUserStatusState } from '../utils/statusHelpers.js';
 import { validatePassword } from '../utils/passwordValidation.js';
+import { canManageTarget, getVisibleUserRoleFilter, isRoleCreateAllowed } from '../utils/roleAccess.js';
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -49,37 +50,67 @@ export const login = asyncHandler(async (req, res) => {
 
 // 2. Create User
 export const createUser = asyncHandler(async (req, res) => {
-  const { name, email, password, status } = req.body;
+  const { name, email, password, status, role: requestedRole } = req.body;
+  const actorRole = req.body.actorRole || 'user';
+  const targetRole = requestedRole || 'user';
+
+  if (!isRoleCreateAllowed(actorRole, targetRole)) {
+    return res.status(403).json({ success: false, message: 'You are not allowed to create this role.' });
+  }
+
   const existing = await User.findOne({ email });
   if (existing) return res.status(400).json({ success: false, message: 'User already exists' });
 
   const passwordHash = await bcrypt.hash(password, 10);
   const { status: normalizedStatus, isDeleted } = getUserStatusState(status);
-  const newUser = await User.create({ name, email, passwordHash, role: 'user', status: normalizedStatus, isDeleted });
+  const newUser = await User.create({ name, email, passwordHash, role: targetRole, status: normalizedStatus, isDeleted });
   res.status(201).json({ success: true, message: 'User created successfully', data: newUser });
 });
 
 // 3. Get Active Users
-export const getActiveUsers = asyncHandler(async (_req, res) => {
-  const users = await User.find({ status: 'active', isDeleted: false, role: 'user' }).lean();
+export const getActiveUsers = asyncHandler(async (req, res) => {
+  const actorRole = req.query.role || 'user';
+  const roleFilter = getVisibleUserRoleFilter(actorRole);
+  const users = await User.find({ status: 'active', isDeleted: false, role: roleFilter }).lean();
   res.status(200).json({ success: true, data: users });
 });
 
 // 4. Get Soft-Deleted Users (Recycle Bin)
-export const getDeletedUsers = asyncHandler(async (_req, res) => {
-  const users = await User.find({ status: 'inactive', isDeleted: true, role: 'user' }).lean();
+export const getDeletedUsers = asyncHandler(async (req, res) => {
+  const actorRole = req.query.role || 'user';
+  const roleFilter = getVisibleUserRoleFilter(actorRole);
+  const users = await User.find({ status: 'inactive', isDeleted: true, role: roleFilter }).lean();
   res.status(200).json({ success: true, data: users });
 });
 
 // 5. Update User Profile (Triggered by Dashboard Edit Modal)
 export const updateUser = asyncHandler(async (req, res) => {
-  const { name, email, status } = req.body;
+  const { name, email, status, role: requestedRole } = req.body;
+  const targetUser = await User.findById(req.params.id);
+  const actorRole = req.body.actorRole || 'user';
+
+  if (!targetUser) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  if (!canManageTarget(actorRole, targetUser.role)) {
+    return res.status(403).json({ success: false, message: 'You are not allowed to manage this account.' });
+  }
+
+  if (requestedRole && !isRoleCreateAllowed(actorRole, requestedRole)) {
+    return res.status(403).json({ success: false, message: 'You are not allowed to assign this role.' });
+  }
+
   const updates = { name, email };
 
   if (typeof status !== 'undefined') {
     const { status: normalizedStatus, isDeleted } = getUserStatusState(status);
     updates.status = normalizedStatus;
     updates.isDeleted = isDeleted;
+  }
+
+  if (requestedRole) {
+    updates.role = requestedRole;
   }
 
   const updated = await User.findByIdAndUpdate(
@@ -97,18 +128,51 @@ export const updateUser = asyncHandler(async (req, res) => {
 
 // 6. Soft Delete User
 export const softDeleteUser = asyncHandler(async (req, res) => {
+  const targetUser = await User.findById(req.params.id);
+  const actorRole = req.body.actorRole || 'user';
+
+  if (!targetUser) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  if (!canManageTarget(actorRole, targetUser.role)) {
+    return res.status(403).json({ success: false, message: 'You are not allowed to manage this account.' });
+  }
+
   await User.findByIdAndUpdate(req.params.id, { status: 'inactive', isDeleted: true });
   res.status(200).json({ success: true, message: 'User soft deleted' });
 });
 
 // 7. Restore User
 export const restoreUser = asyncHandler(async (req, res) => {
+  const targetUser = await User.findById(req.params.id);
+  const actorRole = req.body.actorRole || 'user';
+
+  if (!targetUser) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  if (!canManageTarget(actorRole, targetUser.role)) {
+    return res.status(403).json({ success: false, message: 'You are not allowed to manage this account.' });
+  }
+
   await User.findByIdAndUpdate(req.params.id, { status: 'active', isDeleted: false });
   res.status(200).json({ success: true, message: 'User restored' });
 });
 
 // 8. Hard Delete User
 export const hardDeleteUser = asyncHandler(async (req, res) => {
+  const targetUser = await User.findById(req.params.id);
+  const actorRole = req.body.actorRole || 'user';
+
+  if (!targetUser) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  if (!canManageTarget(actorRole, targetUser.role)) {
+    return res.status(403).json({ success: false, message: 'You are not allowed to manage this account.' });
+  }
+
   await User.findByIdAndDelete(req.params.id);
   res.status(200).json({ success: true, message: 'User permanently purged' });
 });
@@ -139,7 +203,7 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
 // 10. Admin Reset User Password
 export const adminResetUserPassword = asyncHandler(async (req, res) => {
   const { userId } = req.params;
-  const { password } = req.body;
+  const { password, actorRole } = req.body;
 
   const validation = validatePassword(password);
   if (!validation.valid) {
@@ -149,6 +213,10 @@ export const adminResetUserPassword = asyncHandler(async (req, res) => {
   const user = await User.findById(userId);
   if (!user) {
     return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  if (!canManageTarget(actorRole || 'user', user.role)) {
+    return res.status(403).json({ success: false, message: 'You are not allowed to manage this account.' });
   }
 
   const passwordHash = await bcrypt.hash(password, 10);

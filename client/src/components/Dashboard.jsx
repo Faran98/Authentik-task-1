@@ -5,7 +5,7 @@ export const Dashboard = ({ user, onLogout }) => {
   const [activeUsers, setActiveUsers] = useState([]);
   const [deletedUsers, setDeletedUsers] = useState([]);
   const [currentTab, setCurrentTab] = useState('active');
-  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', status: 'active' });
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', status: 'active', role: 'user' });
   
   // State for Editing User Profile
   const [editingUser, setEditingUser] = useState(null); 
@@ -31,8 +31,8 @@ export const Dashboard = ({ user, onLogout }) => {
   const handleCreate = async (e) => {
     e.preventDefault();
     try {
-      await fetchClient('/users', { method: 'POST', body: newUser });
-      setNewUser({ name: '', email: '', password: '', status: 'active' });
+      await fetchClient('/users', { method: 'POST', body: { ...newUser, actorRole: user?.role } });
+      setNewUser({ name: '', email: '', password: '', status: 'active', role: 'user' });
       fetchData();
     } catch (err) {
       alert(err.message);
@@ -50,7 +50,7 @@ export const Dashboard = ({ user, onLogout }) => {
     try {
       await fetchClient(`/users/${editingUser._id}`, {
         method: 'PUT',
-        body: editFormData,
+        body: { ...editFormData, actorRole: user?.role },
       });
       setEditingUser(null);
       fetchData();
@@ -63,7 +63,7 @@ export const Dashboard = ({ user, onLogout }) => {
   // Action Handlers
   const handleSoftDelete = async (id) => {
     try {
-      await fetchClient(`/users/soft-delete/${id}`, { method: 'PATCH' });
+      await fetchClient(`/users/soft-delete/${id}`, { method: 'PATCH', body: { actorRole: user?.role } });
       fetchData();
     } catch (err) {
       alert(err.message);
@@ -72,7 +72,7 @@ export const Dashboard = ({ user, onLogout }) => {
 
   const handleRestore = async (id) => {
     try {
-      await fetchClient(`/users/restore/${id}`, { method: 'PATCH' });
+      await fetchClient(`/users/restore/${id}`, { method: 'PATCH', body: { actorRole: user?.role } });
       fetchData();
     } catch (err) {
       alert(err.message);
@@ -81,7 +81,7 @@ export const Dashboard = ({ user, onLogout }) => {
 
   const handleHardDelete = async (id) => {
     try {
-      await fetchClient(`/users/hard-delete/${id}`, { method: 'DELETE' });
+      await fetchClient(`/users/hard-delete/${id}`, { method: 'DELETE', body: { actorRole: user?.role } });
       fetchData();
     } catch (err) {
       alert(err.message);
@@ -98,7 +98,7 @@ export const Dashboard = ({ user, onLogout }) => {
     try {
       await fetchClient(`/users/${passwordResetData.userId}/reset-password`, {
         method: 'PATCH',
-        body: { password: passwordResetData.password },
+        body: { password: passwordResetData.password, actorRole: user?.role },
       });
       alert('Password updated successfully');
       setPasswordResetData({ userId: '', password: '', confirmPassword: '' });
@@ -134,6 +134,12 @@ export const Dashboard = ({ user, onLogout }) => {
           <label><input type="radio" name="newUserStatus" checked={newUser.status === 'active'} onChange={() => setNewUser({ ...newUser, status: 'active' })} /> Active</label>
           <label><input type="radio" name="newUserStatus" checked={newUser.status === 'inactive'} onChange={() => setNewUser({ ...newUser, status: 'inactive' })} /> Inactive</label>
         </div>
+        {user?.role === 'admin' && (
+          <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })} style={{ flex: '1 1 140px', padding: '8px' }}>
+            <option value="user">User</option>
+            <option value="manager">Manager</option>
+          </select>
+        )}
         <button type="submit" style={{ padding: '8px 16px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Create User</button>
       </form>
 
