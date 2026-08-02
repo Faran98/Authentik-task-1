@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
 import { sendEmail } from '../utils/sendEmail.js';
+import { getUserStatusState } from '../utils/statusHelpers.js';
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -47,34 +48,42 @@ export const login = asyncHandler(async (req, res) => {
 
 // 2. Create User
 export const createUser = asyncHandler(async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, email, password, status } = req.body;
   const existing = await User.findOne({ email });
   if (existing) return res.status(400).json({ success: false, message: 'User already exists' });
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const newUser = await User.create({ name, email, passwordHash, role: 'user' });
+  const { status: normalizedStatus, isDeleted } = getUserStatusState(status);
+  const newUser = await User.create({ name, email, passwordHash, role: 'user', status: normalizedStatus, isDeleted });
   res.status(201).json({ success: true, message: 'User created successfully', data: newUser });
 });
 
 // 3. Get Active Users
 export const getActiveUsers = asyncHandler(async (_req, res) => {
-  const users = await User.find({ isDeleted: false, role: 'user' }).lean();
+  const users = await User.find({ status: 'active', isDeleted: false, role: 'user' }).lean();
   res.status(200).json({ success: true, data: users });
 });
 
 // 4. Get Soft-Deleted Users (Recycle Bin)
 export const getDeletedUsers = asyncHandler(async (_req, res) => {
-  const users = await User.find({ isDeleted: true, role: 'user' }).lean();
+  const users = await User.find({ status: 'inactive', isDeleted: true, role: 'user' }).lean();
   res.status(200).json({ success: true, data: users });
 });
 
 // 5. Update User Profile (Triggered by Dashboard Edit Modal)
 export const updateUser = asyncHandler(async (req, res) => {
-  const { name, email } = req.body;
+  const { name, email, status } = req.body;
+  const updates = { name, email };
+
+  if (typeof status !== 'undefined') {
+    const { status: normalizedStatus, isDeleted } = getUserStatusState(status);
+    updates.status = normalizedStatus;
+    updates.isDeleted = isDeleted;
+  }
 
   const updated = await User.findByIdAndUpdate(
     req.params.id,
-    { name, email },
+    updates,
     { new: true, runValidators: true }
   ).select('-passwordHash');
 
@@ -87,13 +96,13 @@ export const updateUser = asyncHandler(async (req, res) => {
 
 // 6. Soft Delete User
 export const softDeleteUser = asyncHandler(async (req, res) => {
-  await User.findByIdAndUpdate(req.params.id, { isDeleted: true });
+  await User.findByIdAndUpdate(req.params.id, { status: 'inactive', isDeleted: true });
   res.status(200).json({ success: true, message: 'User soft deleted' });
 });
 
 // 7. Restore User
 export const restoreUser = asyncHandler(async (req, res) => {
-  await User.findByIdAndUpdate(req.params.id, { isDeleted: false });
+  await User.findByIdAndUpdate(req.params.id, { status: 'active', isDeleted: false });
   res.status(200).json({ success: true, message: 'User restored' });
 });
 
@@ -106,11 +115,12 @@ export const hardDeleteUser = asyncHandler(async (req, res) => {
 // 9. Update User Status Toggle
 export const updateUserStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { isDeleted } = req.body;
+  const { status, isDeleted } = req.body;
+  const nextState = getUserStatusState(status ?? isDeleted);
 
   const updatedUser = await User.findByIdAndUpdate(
     id,
-    { isDeleted },
+    { status: nextState.status, isDeleted: nextState.isDeleted },
     { new: true }
   );
 
@@ -120,7 +130,7 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     success: true,
-    message: `User status updated to ${isDeleted ? 'Inactive/Deleted' : 'Active'}`,
+    message: `User status updated to ${nextState.status === 'inactive' ? 'Inactive/Deleted' : 'Active'}`,
     data: updatedUser,
   });
 });

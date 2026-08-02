@@ -5,11 +5,11 @@ export const Dashboard = ({ user, onLogout }) => {
   const [activeUsers, setActiveUsers] = useState([]);
   const [deletedUsers, setDeletedUsers] = useState([]);
   const [currentTab, setCurrentTab] = useState('active');
-  const [newUser, setNewUser] = useState({ name: '', email: '', password: '' });
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', status: 'active' });
   
   // State for Editing User Profile
   const [editingUser, setEditingUser] = useState(null); 
-  const [editFormData, setEditFormData] = useState({ name: '', email: '' });
+  const [editFormData, setEditFormData] = useState({ name: '', email: '', status: 'active' });
 
   const fetchData = async () => {
     try {
@@ -31,7 +31,7 @@ export const Dashboard = ({ user, onLogout }) => {
     e.preventDefault();
     try {
       await fetchClient('/users', { method: 'POST', body: newUser });
-      setNewUser({ name: '', email: '', password: '' });
+      setNewUser({ name: '', email: '', password: '', status: 'active' });
       fetchData();
     } catch (err) {
       alert(err.message);
@@ -41,7 +41,7 @@ export const Dashboard = ({ user, onLogout }) => {
   // ---------------- UPDATE USER PROFILE LOGIC ----------------
   const handleOpenEditModal = (userToEdit) => {
     setEditingUser(userToEdit);
-    setEditFormData({ name: userToEdit.name, email: userToEdit.email });
+    setEditFormData({ name: userToEdit.name, email: userToEdit.email, status: userToEdit.isDeleted ? 'inactive' : 'active' });
   };
 
   const handleUpdateUserSubmit = async (e) => {
@@ -105,10 +105,14 @@ export const Dashboard = ({ user, onLogout }) => {
       </div>
 
       {/* Create Form */}
-      <form onSubmit={handleCreate} style={{ display: 'flex', gap: '10px', marginBottom: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #ddd' }}>
-        <input placeholder="Name" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} required style={{ flex: 1, padding: '8px' }} />
-        <input placeholder="Email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} required style={{ flex: 1, padding: '8px' }} />
-        <input type="password" placeholder="Password" value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} required style={{ flex: 1, padding: '8px' }} />
+      <form onSubmit={handleCreate} style={{ display: 'flex', gap: '10px', marginBottom: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #ddd', flexWrap: 'wrap' }}>
+        <input placeholder="Name" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
+        <input placeholder="Email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
+        <input type="password" placeholder="Password" value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '1 1 140px' }}>
+          <label><input type="radio" name="newUserStatus" checked={newUser.status === 'active'} onChange={() => setNewUser({ ...newUser, status: 'active' })} /> Active</label>
+          <label><input type="radio" name="newUserStatus" checked={newUser.status === 'inactive'} onChange={() => setNewUser({ ...newUser, status: 'inactive' })} /> Inactive</label>
+        </div>
         <button type="submit" style={{ padding: '8px 16px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Create User</button>
       </form>
 
@@ -159,7 +163,7 @@ export const Dashboard = ({ user, onLogout }) => {
                     backgroundColor: u.isDeleted ? '#fee2e2' : '#dcfce7', 
                     color: u.isDeleted ? '#dc2626' : '#16a34a' 
                   }}>
-                    {u.isDeleted ? 'Inactive' : 'Active'}
+                    {u.status === 'inactive' || u.isDeleted ? 'Inactive' : 'Active'}
                   </span>
                 </td>
 
@@ -218,6 +222,13 @@ export const Dashboard = ({ user, onLogout }) => {
                   required 
                   style={{ width: '100%', padding: '8px', marginTop: '5px', borderRadius: '4px', border: '1px solid #ccc' }} 
                 />
+              </div>
+              <div>
+                <label style={{ fontSize: '13px', fontWeight: 'bold' }}>Status</label>
+                <div style={{ display: 'flex', gap: '12px', marginTop: '6px' }}>
+                  <label><input type="radio" name="editUserStatus" checked={editFormData.status === 'active'} onChange={() => setEditFormData({ ...editFormData, status: 'active' })} /> Active</label>
+                  <label><input type="radio" name="editUserStatus" checked={editFormData.status === 'inactive'} onChange={() => setEditFormData({ ...editFormData, status: 'inactive' })} /> Inactive</label>
+                </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
                 <button 
