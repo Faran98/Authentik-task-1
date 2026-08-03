@@ -8,7 +8,7 @@ import {
   softDeleteUser,
   restoreUser,
   hardDeleteUser,
-  updateUserStatus,
+  toggleUserStatus, // Single import, unused duplicates removed
   adminResetUserPassword,
   requestPasswordChange,
   getPasswordChangeRequests,
@@ -34,11 +34,14 @@ router.get('/users/active', getActiveUsers);
 router.get('/users/deleted', getDeletedUsers);
 router.post('/users', createUser);
 router.put('/users/:id', updateUser);
+router.post('/admin/add-user', createUser);
+router.put('/admin/users/:id', updateUser);
 
 // Soft Delete / Status / Restore Routes
 router.patch('/users/soft-delete/:id', softDeleteUser);
 router.patch('/users/restore/:id', restoreUser);
-router.patch('/users/status/:id', updateUserStatus);
+router.patch('/users/status/:id', toggleUserStatus); // Alias route updated to toggleUserStatus
+router.put('/admin/toggle-status/:id', toggleUserStatus);
 router.delete('/users/hard-delete/:id', hardDeleteUser);
 
 export default router;
