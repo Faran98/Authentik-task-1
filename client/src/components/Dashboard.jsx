@@ -1,27 +1,35 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { fetchClient } from '../api/fetchClient';
 
+const emptyUserForm = { name: '', email: '', password: '', status: 'active', role: 'customer' };
+
 export const Dashboard = ({ user, onLogout }) => {
+  const navigate = useNavigate();
   const [activeUsers, setActiveUsers] = useState([]);
-  const [deletedUsers, setDeletedUsers] = useState([]);
-  const [currentTab, setCurrentTab] = useState('active');
-  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', status: 'active', role: 'user' });
-  
-  // State for Editing User Profile
-  const [editingUser, setEditingUser] = useState(null); 
-  const [editFormData, setEditFormData] = useState({ name: '', email: '', status: 'active' });
-  const [passwordResetData, setPasswordResetData] = useState({ userId: '', password: '', confirmPassword: '' });
+  const [inactiveUsers, setInactiveUsers] = useState([]);
   const [approvalRequests, setApprovalRequests] = useState([]);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newUser, setNewUser] = useState({ ...emptyUserForm, confirmPassword: '' });
+  const [editingUser, setEditingUser] = useState(null);
+  const [editFormData, setEditFormData] = useState({ name: '', email: '', password: '', confirmPassword: '', status: 'active', role: 'customer' });
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [approvalReview, setApprovalReview] = useState({ requestId: '', action: 'Approved', reason: '' });
+
+  const roleLabel = useMemo(() => ({ admin: 'Admin', manager: 'Manager', customer: 'Customer' }), []);
 
   const fetchData = async () => {
     try {
-      const activeRes = await fetchClient('/users/active');
-      const deletedRes = await fetchClient('/users/deleted');
+      const [activeRes, inactiveRes, requestsRes] = await Promise.all([
+        fetchClient('/users/active?role=' + (user?.role || 'customer')),
+        fetchClient('/users/deleted?role=' + (user?.role || 'customer')),
+        user?.role === 'admin' ? fetchClient('/password-change-requests') : Promise.resolve({ data: [] }),
+      ]);
+
       setActiveUsers(activeRes?.data || []);
-      setDeletedUsers(deletedRes?.data || []);
+      setInactiveUsers(inactiveRes?.data || []);
       if (user?.role === 'admin') {
-        const requestsRes = await fetchClient('/password-change-requests');
         setApprovalRequests(requestsRes?.data || []);
       }
     } catch (err) {
@@ -31,91 +39,96 @@ export const Dashboard = ({ user, onLogout }) => {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [user?.role]);
 
-  // Create User
   const handleCreate = async (e) => {
     e.preventDefault();
-    try {
-      await fetchClient('/users', { method: 'POST', body: { ...newUser, actorRole: user?.role } });
-      setNewUser({ name: '', email: '', password: '', status: 'active', role: 'user' });
-      fetchData();
-    } catch (err) {
-      alert(err.message);
-    }
-  };
-
-  // ---------------- UPDATE USER PROFILE LOGIC ----------------
-  const handleOpenEditModal = (userToEdit) => {
-    setEditingUser(userToEdit);
-    setEditFormData({ name: userToEdit.name, email: userToEdit.email, status: userToEdit.isDeleted ? 'inactive' : 'active' });
-  };
-
-  const handleUpdateUserSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      await fetchClient(`/users/${editingUser._id}`, {
-        method: 'PUT',
-        body: { ...editFormData, actorRole: user?.role },
-      });
-      setEditingUser(null);
-      fetchData();
-      alert('User profile updated successfully!');
-    } catch (err) {
-      alert(err.message || 'Failed to update user profile');
-    }
-  };
-
-  // Action Handlers
-  const handleSoftDelete = async (id) => {
-    try {
-      await fetchClient(`/users/soft-delete/${id}`, { method: 'PATCH', body: { actorRole: user?.role } });
-      fetchData();
-    } catch (err) {
-      alert(err.message);
-    }
-  };
-
-  const handleRestore = async (id) => {
-    try {
-      await fetchClient(`/users/restore/${id}`, { method: 'PATCH', body: { actorRole: user?.role } });
-      fetchData();
-    } catch (err) {
-      alert(err.message);
-    }
-  };
-
-  const handleHardDelete = async (id) => {
-    try {
-      await fetchClient(`/users/hard-delete/${id}`, { method: 'DELETE', body: { actorRole: user?.role } });
-      fetchData();
-    } catch (err) {
-      alert(err.message);
-    }
-  };
-
-  const handlePasswordReset = async (e) => {
-    e.preventDefault();
-    if (passwordResetData.password !== passwordResetData.confirmPassword) {
-      alert('Passwords do not match');
+    if (newUser.password && newUser.password !== newUser.confirmPassword) {
+      alert('New password and confirm password must match.');
       return;
     }
-
+    setLoading(true);
     try {
-      if (user?.role === 'manager') {
+      const payload = {
+        ...newUser,
+        actorRole: user?.role,
+        role: user?.role === 'manager' ? 'customer' : newUser.role,
+      };
+      await fetchClient('/users', { method: 'POST', body: payload });
+      setNewUser({ ...emptyUserForm, confirmPassword: '' });
+      setShowCreateModal(false);
+      fetchData();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openEditModal = (targetUser) => {
+    setEditingUser(targetUser);
+    setEditFormData({
+      name: targetUser.name,
+      email: targetUser.email,
+      password: '',
+      confirmPassword: '',
+      status: targetUser.status || 'active',
+      role: targetUser.role || 'customer',
+    });
+  };
+
+  const handleUpdateUser = async (e) => {
+    e.preventDefault();
+    if (editFormData.password && editFormData.password !== editFormData.confirmPassword) {
+      alert('New password and confirm password must match.');
+      return;
+    }
+    setLoading(true);
+    try {
+      if (user?.role === 'manager' && editFormData.password) {
         await fetchClient('/password-change-requests', {
           method: 'POST',
-          body: { targetUserId: passwordResetData.userId, password: passwordResetData.password, actorRole: user?.role, requesterId: user?.id },
+          body: {
+            targetUserId: editingUser._id,
+            password: editFormData.password,
+            actorRole: user?.role,
+            requesterId: user?.id || user?._id,
+          },
         });
         alert('Password change request submitted for admin approval');
       } else {
-        await fetchClient(`/users/${passwordResetData.userId}/reset-password`, {
-          method: 'PATCH',
-          body: { password: passwordResetData.password, actorRole: user?.role },
-        });
-        alert('Password updated successfully');
+        const payload = {
+          ...editFormData,
+          actorRole: user?.role,
+          role: user?.role === 'admin' ? editFormData.role : undefined,
+        };
+        await fetchClient(`/users/${editingUser._id}`, { method: 'PUT', body: payload });
       }
-      setPasswordResetData({ userId: '', password: '', confirmPassword: '' });
+      setEditingUser(null);
+      fetchData();
+    } catch (err) {
+      alert(err.message || 'Failed to update user profile');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleArchive = async (targetUser) => {
+    try {
+      await fetchClient(`/users/soft-delete/${targetUser._id}`, { method: 'PATCH', body: { actorRole: user?.role } });
+      fetchData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleStatusToggle = async (targetUser) => {
+    try {
+      const nextStatus = targetUser.status === 'active' ? 'inactive' : 'active';
+      await fetchClient(`/users/${targetUser._id}`, {
+        method: 'PUT',
+        body: { status: nextStatus, actorRole: user?.role },
+      });
       fetchData();
     } catch (err) {
       alert(err.message);
@@ -137,235 +150,304 @@ export const Dashboard = ({ user, onLogout }) => {
     }
   };
 
-  return (
-    <div style={{ padding: '30px', maxWidth: '1000px', margin: '0 auto', fontFamily: 'sans-serif' }}>
-      
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h2>Admin Dashboard</h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <span>Logged in as: <strong>{user?.name || user?.email}</strong></span>
-          <button 
-            onClick={onLogout} 
-            style={{ padding: '8px 16px', backgroundColor: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
-          >
-            Logout
-          </button>
+  const dismissRequest = async (requestId) => {
+    try {
+      await fetchClient(`/password-change-requests/${requestId}/review`, {
+        method: 'PATCH',
+        body: { action: 'Approved' },
+      });
+      fetchData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const renderUserTable = (title, users, allowEdit = true) => {
+    const visibleUsers = users.filter((item) => item.role !== 'admin');
+    return (
+      <div style={{ marginBottom: '24px', background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <h3 style={{ margin: 0 }}>{title}</h3>
+          <span style={{ color: '#6b7280', fontSize: '14px' }}>{visibleUsers.length} record(s)</span>
         </div>
-      </div>
-
-      {/* Create Form */}
-      <form onSubmit={handleCreate} style={{ display: 'flex', gap: '10px', marginBottom: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #ddd', flexWrap: 'wrap' }}>
-        <input placeholder="Name" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
-        <input placeholder="Email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
-        <input type="password" placeholder="Password" value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '1 1 140px' }}>
-          <label><input type="radio" name="newUserStatus" checked={newUser.status === 'active'} onChange={() => setNewUser({ ...newUser, status: 'active' })} /> Active</label>
-          <label><input type="radio" name="newUserStatus" checked={newUser.status === 'inactive'} onChange={() => setNewUser({ ...newUser, status: 'inactive' })} /> Inactive</label>
-        </div>
-        {user?.role === 'admin' && (
-          <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })} style={{ flex: '1 1 140px', padding: '8px' }}>
-            <option value="user">User</option>
-            <option value="manager">Manager</option>
-          </select>
-        )}
-        <button type="submit" style={{ padding: '8px 16px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Create User</button>
-      </form>
-
-      {/* Navigation Tabs */}
-      <div style={{ marginBottom: '15px' }}>
-        <button 
-          onClick={() => setCurrentTab('active')} 
-          style={{ padding: '8px 16px', fontWeight: currentTab === 'active' ? 'bold' : 'normal', backgroundColor: currentTab === 'active' ? '#e5e7eb' : 'transparent', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer' }}
-        >
-          Active Users ({activeUsers.length})
-        </button>
-        <button 
-          onClick={() => setCurrentTab('trash')} 
-          style={{ marginLeft: '10px', padding: '8px 16px', fontWeight: currentTab === 'trash' ? 'bold' : 'normal', backgroundColor: currentTab === 'trash' ? '#fee2e2' : 'transparent', border: '1px solid #ccc', borderRadius: '4px', cursor: 'pointer' }}
-        >
-          Recycle Bin / Inactive ({deletedUsers.length})
-        </button>
-      </div>
-
-      {/* Password Reset Form */}
-      <form onSubmit={handlePasswordReset} style={{ display: 'flex', gap: '10px', marginBottom: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #ddd', flexWrap: 'wrap' }}>
-        <select
-          value={passwordResetData.userId}
-          onChange={(e) => setPasswordResetData({ ...passwordResetData, userId: e.target.value })}
-          required
-          style={{ flex: '1 1 180px', padding: '8px' }}
-        >
-          <option value="">Select a user</option>
-          {[...activeUsers, ...deletedUsers].map((user) => (
-            <option key={user._id} value={user._id}>{user.name} ({user.email})</option>
-          ))}
-        </select>
-        <input type="password" placeholder="New password" value={passwordResetData.password} onChange={(e) => setPasswordResetData({ ...passwordResetData, password: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
-        <input type="password" placeholder="Confirm password" value={passwordResetData.confirmPassword} onChange={(e) => setPasswordResetData({ ...passwordResetData, confirmPassword: e.target.value })} required style={{ flex: '1 1 180px', padding: '8px' }} />
-        <button type="submit" style={{ padding: '8px 16px', backgroundColor: '#7c3aed', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>{user?.role === 'manager' ? 'Request Password Change' : 'Reset Password'}</button>
-      </form>
-
-      {user?.role === 'admin' && approvalRequests.length > 0 && (
-        <div style={{ marginBottom: '20px', background: '#fff', padding: '15px', borderRadius: '8px', border: '1px solid #ddd' }}>
-          <h3 style={{ marginTop: 0 }}>Pending Password Change Requests</h3>
-          <table border={1} cellPadding={8} style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#f3f4f6' }}>
-                <th>Requested By</th>
-                <th>Target User</th>
-                <th>Status</th>
-                <th>Action</th>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ backgroundColor: '#f9fafb', textAlign: 'left' }}>
+              <th style={{ padding: '10px', borderBottom: '1px solid #e5e7eb' }}>Name</th>
+              <th style={{ padding: '10px', borderBottom: '1px solid #e5e7eb' }}>Email</th>
+              <th style={{ padding: '10px', borderBottom: '1px solid #e5e7eb' }}>Role</th>
+              <th style={{ padding: '10px', borderBottom: '1px solid #e5e7eb' }}>Status</th>
+              <th style={{ padding: '10px', borderBottom: '1px solid #e5e7eb' }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleUsers.length === 0 ? (
+              <tr>
+                <td colSpan="5" style={{ textAlign: 'center', padding: '16px', color: '#6b7280' }}>No users found</td>
               </tr>
-            </thead>
-            <tbody>
-              {approvalRequests.map((request) => (
-                <tr key={request._id}>
-                  <td>{request.requestedBy?.name || request.requestedBy?.email}</td>
-                  <td>{request.targetUser?.name || request.targetUser?.email}</td>
-                  <td>{request.status}</td>
-                  <td>
-                    <button onClick={() => setApprovalReview({ requestId: request._id, action: 'Approved', reason: '' })} style={{ padding: '6px 10px', backgroundColor: '#16a34a', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginRight: '8px' }}>Approve</button>
-                    <button onClick={() => setApprovalReview({ requestId: request._id, action: 'Rejected', reason: '' })} style={{ padding: '6px 10px', backgroundColor: '#dc2626', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Reject</button>
+            ) : (
+              visibleUsers.map((item) => (
+                <tr key={item._id}>
+                  <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{item.name}</td>
+                  <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{item.email}</td>
+                  <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>{roleLabel[item.role] || item.role}</td>
+                  <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>
+                    <button
+                      onClick={() => handleStatusToggle(item)}
+                      style={{ padding: '6px 10px', borderRadius: '999px', border: 'none', cursor: 'pointer', backgroundColor: item.status === 'active' ? '#dcfce7' : '#fee2e2', color: item.status === 'active' ? '#166534' : '#991b1b' }}
+                    >
+                      {item.status === 'active' ? 'Active' : 'Inactive'}
+                    </button>
+                  </td>
+                  <td style={{ padding: '10px', borderBottom: '1px solid #f3f4f6' }}>
+                    {allowEdit && (
+                      <>
+                        <button
+                          onClick={() => openEditModal(item)}
+                          style={{ padding: '6px 12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', marginRight: '8px' }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleArchive(item)}
+                          style={{ padding: '6px 12px', backgroundColor: '#f59e0b', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                        >
+                          Archive
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {approvalReview.requestId && (
-            <form onSubmit={handleApproveRejectRequest} style={{ marginTop: '15px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <label style={{ fontWeight: 'bold' }}>Review action</label>
-              <select value={approvalReview.action} onChange={(e) => setApprovalReview({ ...approvalReview, action: e.target.value })} style={{ padding: '8px' }}>
-                <option value="Approved">Approve</option>
-                <option value="Rejected">Reject</option>
-              </select>
-              {approvalReview.action === 'Rejected' && (
-                <textarea value={approvalReview.reason} onChange={(e) => setApprovalReview({ ...approvalReview, reason: e.target.value })} placeholder="Rejection reason" style={{ minHeight: '80px', padding: '8px' }} />
-              )}
-              <button type="submit" style={{ padding: '8px 14px', alignSelf: 'flex-start', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Submit Review</button>
-            </form>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', background: '#f8fafc', fontFamily: 'sans-serif' }}>
+      <header style={{ background: '#111827', color: '#fff', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h2 style={{ margin: 0 }}>{user?.role === 'admin' ? 'Admin Dashboard' : user?.role === 'manager' ? 'Manager Dashboard' : 'Customer Dashboard'}</h2>
+          <p style={{ margin: '4px 0 0', color: '#d1d5db' }}>Manage users, approvals, and profile access from one place.</p>
+        </div>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ color: '#e5e7eb' }}>Hello, {user?.name || user?.email}</span>
+          <button
+            onClick={() => setProfileMenuOpen((prev) => !prev)}
+            style={{ width: '42px', height: '42px', borderRadius: '50%', background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}
+          >
+            {(user?.name || user?.email || 'U').charAt(0).toUpperCase()}
+          </button>
+          {profileMenuOpen && (
+            <div style={{ position: 'absolute', right: 0, top: '54px', background: '#fff', color: '#111827', borderRadius: '8px', boxShadow: '0 8px 20px rgba(0,0,0,0.15)', minWidth: '160px', zIndex: 10 }}>
+              <button onClick={() => { setProfileMenuOpen(false); navigate('/profile'); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', border: 'none', background: 'transparent', cursor: 'pointer' }}>Edit Profile</button>
+              <button onClick={() => { setProfileMenuOpen(false); onLogout(); }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#dc2626' }}>Logout</button>
+            </div>
           )}
         </div>
-      )}
+      </header>
 
-      {/* User Table with Status & Edit Options */}
-      <table border={1} cellPadding={10} style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#fff', borderColor: '#ddd' }}>
-        <thead>
-          <tr style={{ backgroundColor: '#f3f4f6' }}>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(currentTab === 'active' ? activeUsers : deletedUsers).length === 0 ? (
-            <tr>
-              <td colSpan={4} style={{ textAlign: 'center', color: '#666' }}>No users found</td>
-            </tr>
-          ) : (
-            (currentTab === 'active' ? activeUsers : deletedUsers).map((u) => (
-              <tr key={u._id}>
-                <td>{u.name}</td>
-                <td>{u.email}</td>
-                
-                {/* 1. STATUS COLUMN */}
-                <td>
-                  <span style={{ 
-                    padding: '4px 8px', 
-                    borderRadius: '12px', 
-                    fontSize: '12px', 
-                    fontWeight: 'bold', 
-                    backgroundColor: u.isDeleted ? '#fee2e2' : '#dcfce7', 
-                    color: u.isDeleted ? '#dc2626' : '#16a34a' 
-                  }}>
-                    {u.status === 'inactive' || u.isDeleted ? 'Inactive' : 'Active'}
-                  </span>
-                </td>
-
-                {/* 2. EDIT & ACTION BUTTONS */}
-                <td>
-                  {currentTab === 'active' ? (
-                    <>
-                      <button 
-                        onClick={() => handleOpenEditModal(u)} 
-                        style={{ padding: '6px 12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginRight: '8px' }}
-                      >
-                        Edit Profile
-                      </button>
-                      <button 
-                        onClick={() => handleSoftDelete(u._id)} 
-                        style={{ padding: '6px 12px', backgroundColor: '#f97316', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                      >
-                        Soft Remove
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button onClick={() => handleRestore(u._id)} style={{ padding: '6px 12px', backgroundColor: '#16a34a', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Restore</button>
-                      <button onClick={() => handleHardDelete(u._id)} style={{ marginLeft: '10px', padding: '6px 12px', backgroundColor: '#dc2626', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Permanent Delete</button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))
+      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginBottom: '16px' }}>
+          {(user?.role === 'admin' || user?.role === 'manager') && (
+            <button onClick={() => setShowCreateModal(true)} style={{ padding: '10px 16px', backgroundColor: '#16a34a', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>
+              Add User
+            </button>
           )}
-        </tbody>
-      </table>
+          {(user?.role === 'admin' || user?.role === 'manager') && (
+            <button onClick={() => navigate('/archived-users')} style={{ padding: '10px 16px', backgroundColor: '#7c3aed', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>
+              View Archived Users
+            </button>
+          )}
+        </div>
 
-      {/* ---------------- EDIT USER PROFILE MODAL ---------------- */}
-      {editingUser && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          <div style={{ backgroundColor: '#fff', padding: '25px', borderRadius: '8px', width: '350px', boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
-            <h3 style={{ marginTop: 0 }}>Update Profile</h3>
-            <form onSubmit={handleUpdateUserSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-              <div>
-                <label style={{ fontSize: '13px', fontWeight: 'bold' }}>Name</label>
-                <input 
-                  type="text" 
-                  value={editFormData.name} 
-                  onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })} 
-                  required 
-                  style={{ width: '100%', padding: '8px', marginTop: '5px', borderRadius: '4px', border: '1px solid #ccc' }} 
-                />
+        {user?.role === 'admin' && approvalRequests.length > 0 && (
+          <div style={{ marginBottom: '20px', background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '16px' }}>
+            <h3 style={{ marginTop: 0 }}>Pending Password Change Requests</h3>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ backgroundColor: '#f9fafb' }}>
+                  <th style={{ textAlign: 'left', padding: '10px' }}>Requested By</th>
+                  <th style={{ textAlign: 'left', padding: '10px' }}>Target User</th>
+                  <th style={{ textAlign: 'left', padding: '10px' }}>Status</th>
+                  <th style={{ textAlign: 'left', padding: '10px' }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {approvalRequests.map((request) => (
+                  <tr key={request._id}>
+                    <td style={{ padding: '10px' }}>{request.requestedBy?.name || request.requestedBy?.email}</td>
+                    <td style={{ padding: '10px' }}>{request.targetUser?.name || request.targetUser?.email}</td>
+                    <td style={{ padding: '10px' }}>{request.status}</td>
+                    <td style={{ padding: '10px' }}>
+                      <button onClick={() => setApprovalReview({ requestId: request._id, action: 'Approved', reason: '' })} style={{ padding: '6px 10px', backgroundColor: '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', marginRight: '8px' }}>Approve</button>
+                      <button onClick={() => setApprovalReview({ requestId: request._id, action: 'Rejected', reason: '' })} style={{ padding: '6px 10px', backgroundColor: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Reject</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {approvalReview.requestId && (
+              <form onSubmit={handleApproveRejectRequest} style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <select value={approvalReview.action} onChange={(e) => setApprovalReview({ ...approvalReview, action: e.target.value })} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+                  <option value="Approved">Approve</option>
+                  <option value="Rejected">Reject</option>
+                </select>
+                {approvalReview.action === 'Rejected' && (
+                  <textarea value={approvalReview.reason} onChange={(e) => setApprovalReview({ ...approvalReview, reason: e.target.value })} placeholder="Rejection reason" style={{ minHeight: '80px', padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }} />
+                )}
+                <button type="submit" style={{ alignSelf: 'flex-start', padding: '8px 14px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Submit Review</button>
+              </form>
+            )}
+          </div>
+        )}
+
+        {user?.role === 'manager' && (
+          <div style={{ marginBottom: '20px', background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '16px' }}>
+            <h3 style={{ marginTop: 0 }}>My Approval Requests</h3>
+            {approvalRequests.length === 0 ? (
+              <p style={{ color: '#6b7280' }}>No approval requests yet.</p>
+            ) : (
+              <div style={{ display: 'grid', gap: '12px' }}>
+                {approvalRequests.map((request) => (
+                  <div key={request._id} style={{ border: '1px solid #e5e7eb', borderRadius: '10px', padding: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                      <div>
+                        <strong>{request.targetUser?.name || 'Customer'}</strong>
+                        <div style={{ color: '#6b7280', fontSize: '14px' }}>{request.targetUser?.email || 'No email'}</div>
+                      </div>
+                      <span style={{ padding: '4px 8px', borderRadius: '999px', backgroundColor: request.status === 'Approved' ? '#dcfce7' : request.status === 'Rejected' ? '#fee2e2' : '#fef3c7', color: request.status === 'Approved' ? '#166534' : request.status === 'Rejected' ? '#991b1b' : '#92400e' }}>{request.status}</span>
+                    </div>
+                    <div style={{ marginTop: '8px', color: '#6b7280', fontSize: '14px' }}>Requested: {new Date(request.createdAt).toLocaleDateString()}</div>
+                    {request.rejectionReason && <div style={{ marginTop: '6px', color: '#991b1b', fontSize: '14px' }}>Reason: {request.rejectionReason}</div>}
+                    {(request.status === 'Approved' || request.status === 'Rejected') && (
+                      <button onClick={() => dismissRequest(request._id)} style={{ marginTop: '10px', padding: '6px 10px', border: 'none', borderRadius: '6px', backgroundColor: '#6b7280', color: '#fff', cursor: 'pointer' }}>Dismiss</button>
+                    )}
+                  </div>
+                ))}
               </div>
-              <div>
-                <label style={{ fontSize: '13px', fontWeight: 'bold' }}>Email</label>
-                <input 
-                  type="email" 
-                  value={editFormData.email} 
-                  onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })} 
-                  required 
-                  style={{ width: '100%', padding: '8px', marginTop: '5px', borderRadius: '4px', border: '1px solid #ccc' }} 
-                />
+            )}
+          </div>
+        )}
+
+        {user?.role === 'admin' ? (
+          <>
+            {renderUserTable('Managers', activeUsers.filter((item) => item.role === 'manager'), true)}
+            {renderUserTable('Customers', activeUsers.filter((item) => item.role === 'customer'), true)}
+            {renderUserTable('Inactive Managers', inactiveUsers.filter((item) => item.role === 'manager'), true)}
+            {renderUserTable('Inactive Customers', inactiveUsers.filter((item) => item.role === 'customer'), true)}
+          </>
+        ) : user?.role === 'manager' ? (
+          <>
+            {renderUserTable('Customers', activeUsers.filter((item) => item.role === 'customer'), true)}
+            {renderUserTable('Inactive Customers', inactiveUsers.filter((item) => item.role === 'customer'), true)}
+          </>
+        ) : (
+          <div style={{ display: 'grid', gap: '16px' }}>
+            <div style={{ background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', color: '#fff', borderRadius: '16px', padding: '24px' }}>
+              <p style={{ margin: 0, textTransform: 'uppercase', letterSpacing: '0.16em', fontSize: '12px', opacity: 0.85 }}>Customer Portal</p>
+              <h3 style={{ margin: '8px 0 6px', fontSize: '28px' }}>Welcome back, {user?.name || 'Customer'}!</h3>
+              <p style={{ margin: 0, opacity: 0.95 }}>Manage your account details and keep your security up to date from one simple view.</p>
+            </div>
+
+            <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '2fr 1fr' }}>
+              <div style={{ background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '20px' }}>
+                <h4 style={{ marginTop: 0 }}>Account Overview</h4>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <div>
+                    <p style={{ margin: '0 0 6px', fontWeight: 'bold' }}>{user?.name || 'Customer Name'}</p>
+                    <p style={{ margin: 0, color: '#6b7280' }}>{user?.email || 'user@example.com'}</p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <span style={{ padding: '6px 10px', borderRadius: '999px', backgroundColor: '#dcfce7', color: '#166534' }}>Active</span>
+                    <span style={{ padding: '6px 10px', borderRadius: '999px', backgroundColor: '#dbeafe', color: '#1e3a8a' }}>Customer</span>
+                  </div>
+                </div>
+                <p style={{ margin: '0 0 8px', color: '#6b7280' }}><strong>Member since:</strong> {new Date().toLocaleDateString()}</p>
+                <p style={{ margin: 0, color: '#6b7280' }}>Your account is secure, active, and ready for self-service actions.</p>
               </div>
-              <div>
-                <label style={{ fontSize: '13px', fontWeight: 'bold' }}>Status</label>
-                <div style={{ display: 'flex', gap: '12px', marginTop: '6px' }}>
-                  <label><input type="radio" name="editUserStatus" checked={editFormData.status === 'active'} onChange={() => setEditFormData({ ...editFormData, status: 'active' })} /> Active</label>
-                  <label><input type="radio" name="editUserStatus" checked={editFormData.status === 'inactive'} onChange={() => setEditFormData({ ...editFormData, status: 'inactive' })} /> Inactive</label>
+
+              <div style={{ background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '20px' }}>
+                <h4 style={{ marginTop: 0 }}>Quick Actions</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <button onClick={() => navigate('/profile')} style={{ padding: '10px 14px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Edit Profile & Security</button>
+                  <button onClick={() => setShowCreateModal(true)} style={{ padding: '10px 14px', backgroundColor: '#f59e0b', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Request Password Reset</button>
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
-                <button 
-                  type="button" 
-                  onClick={() => setEditingUser(null)} 
-                  style={{ padding: '8px 14px', backgroundColor: '#6b7280', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                >
-                  Cancel
-                </button>
-                <button 
-                  type="submit" 
-                  style={{ padding: '8px 14px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                >
-                  Save Changes
-                </button>
+            </div>
+
+            <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+              <div style={{ background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '16px' }}>
+                <h4 style={{ marginTop: 0 }}>Account Health</h4>
+                <p style={{ margin: '4px 0 0', fontSize: '24px', fontWeight: 'bold' }}>Good</p>
+              </div>
+              <div style={{ background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '16px' }}>
+                <h4 style={{ marginTop: 0 }}>Security Status</h4>
+                <p style={{ margin: '4px 0 0', fontSize: '24px', fontWeight: 'bold' }}>Encrypted</p>
+              </div>
+              <div style={{ background: '#fff', borderRadius: '12px', border: '1px solid #e5e7eb', padding: '16px' }}>
+                <h4 style={{ marginTop: 0 }}>Support</h4>
+                <p style={{ margin: '4px 0 0', fontSize: '24px', fontWeight: 'bold' }}>24/7</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {showCreateModal && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 20 }}>
+          <div style={{ background: '#fff', width: '360px', padding: '24px', borderRadius: '12px' }}>
+            <h3 style={{ marginTop: 0 }}>Add User</h3>
+            <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <input value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} placeholder="Name" required style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }} />
+              <input value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} placeholder="Email" required style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }} />
+              <input type="password" value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} placeholder="New Password" required style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }} />
+              <input type="password" value={newUser.confirmPassword} onChange={(e) => setNewUser({ ...newUser, confirmPassword: e.target.value })} placeholder="Confirm Password" required style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }} />
+              {user?.role === 'admin' && (
+                <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })} style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+                  <option value="customer">Customer</option>
+                  <option value="manager">Manager</option>
+                </select>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+                <button type="button" onClick={() => setShowCreateModal(false)} style={{ padding: '8px 12px', backgroundColor: '#6b7280', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" disabled={loading} style={{ padding: '8px 12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>{loading ? 'Saving...' : 'Save'}</button>
               </div>
             </form>
           </div>
         </div>
       )}
 
+      {editingUser && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 20 }}>
+          <div style={{ background: '#fff', width: '380px', padding: '24px', borderRadius: '12px' }}>
+            <h3 style={{ marginTop: 0 }}>Edit User</h3>
+            <form onSubmit={handleUpdateUser} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <input value={editFormData.name} onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })} placeholder="Name" required style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }} />
+              <input value={editFormData.email} onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })} placeholder="Email" required style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }} />
+              <input type="password" value={editFormData.password} onChange={(e) => setEditFormData({ ...editFormData, password: e.target.value })} placeholder="New Password (optional)" style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }} />
+              <input type="password" value={editFormData.confirmPassword} onChange={(e) => setEditFormData({ ...editFormData, confirmPassword: e.target.value })} placeholder="Confirm Password" style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }} />
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <label><input type="radio" name="editStatus" checked={editFormData.status === 'active'} onChange={() => setEditFormData({ ...editFormData, status: 'active' })} /> Active</label>
+                <label><input type="radio" name="editStatus" checked={editFormData.status === 'inactive'} onChange={() => setEditFormData({ ...editFormData, status: 'inactive' })} /> Inactive</label>
+              </div>
+              {user?.role === 'admin' && (
+                <select value={editFormData.role} onChange={(e) => setEditFormData({ ...editFormData, role: e.target.value })} style={{ padding: '10px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+                  <option value="customer">Customer</option>
+                  <option value="manager">Manager</option>
+                </select>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+                <button type="button" onClick={() => setEditingUser(null)} style={{ padding: '8px 12px', backgroundColor: '#6b7280', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" disabled={loading} style={{ padding: '8px 12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>{loading ? 'Saving...' : 'Save'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

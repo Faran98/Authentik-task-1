@@ -1,17 +1,31 @@
+const normalizeRole = (role) => {
+  if (!role) return 'customer';
+  const normalized = String(role).trim().toLowerCase();
+  if (normalized === 'user') return 'customer';
+  return normalized;
+};
+
 export const canManageTarget = (actorRole, targetRole) => {
-  if (actorRole === 'admin') return true;
-  if (actorRole === 'manager') return targetRole === 'user';
+  const normalizedActorRole = normalizeRole(actorRole);
+  const normalizedTargetRole = normalizeRole(targetRole);
+
+  if (normalizedActorRole === 'admin') return true;
+  if (normalizedActorRole === 'manager') return normalizedTargetRole === 'customer';
   return false;
 };
 
 export const isRoleCreateAllowed = (actorRole, targetRole) => {
-  if (actorRole === 'admin') return true;
-  if (actorRole === 'manager') return targetRole === 'user';
+  const normalizedActorRole = normalizeRole(actorRole);
+  const normalizedTargetRole = normalizeRole(targetRole);
+
+  if (normalizedActorRole === 'admin') return true;
+  if (normalizedActorRole === 'manager') return normalizedTargetRole === 'customer';
   return false;
 };
 
 export const getVisibleUserRoleFilter = (actorRole) => {
-  if (actorRole === 'manager') return 'user';
-  if (actorRole === 'admin') return { $in: ['user', 'manager'] };
-  return 'user';
+  const normalizedActorRole = normalizeRole(actorRole);
+  if (normalizedActorRole === 'manager') return 'customer';
+  if (normalizedActorRole === 'admin') return { $in: ['customer', 'manager'] };
+  return 'customer';
 };
