@@ -2,18 +2,12 @@ import React, { useState } from 'react';
 import { fetchClient } from '../api/fetchClient';
 
 export const Login = ({ onLoginSuccess }) => {
-  // Credentials State
-  const [credentials, setCredentials] = useState({ email: '', password: '' });
-  
-  // Forgot Password State
+  const [credentials, setCredentials] = useState({ email: '', password: '', role: 'customer' });
   const [forgotEmail, setForgotEmail] = useState('');
   const [isForgotPassword, setIsForgotPassword] = useState(false);
-  
-  // UI Status States
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // 1. Normal Login Handler
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -25,16 +19,11 @@ export const Login = ({ onLoginSuccess }) => {
         body: credentials,
       });
 
-      // API Response: { success: true, data: { token, user: {...} } }
       if (res?.success && res?.data) {
-        // Token save karein future authenticated calls ke liye
-        if (res.data.token) {
-          localStorage.setItem('token', res.data.token);
-        }
-
-        // Parent (App.jsx) ko actual user object bhejien
+        const userPayload = { ...res.data.user, token: res.data.token };
+        localStorage.setItem('token', res.data.token);
         if (onLoginSuccess) {
-          onLoginSuccess(res.data.user);
+          onLoginSuccess(userPayload);
         }
       } else {
         setMessage(res?.message || 'Login failed. Please check your credentials.');
@@ -46,7 +35,6 @@ export const Login = ({ onLoginSuccess }) => {
     }
   };
 
-  // 2. Forgot Password Handler
   const handleForgotSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -67,14 +55,12 @@ export const Login = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div style={{ maxWidth: '400px', margin: '80px auto', padding: '30px', border: '1px solid #ddd', borderRadius: '8px', backgroundColor: '#fff', fontFamily: 'sans-serif', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
-      
-      {/* VIEW 1: FORGOT PASSWORD */}
+    <div style={{ maxWidth: '420px', margin: '80px auto', padding: '30px', border: '1px solid #ddd', borderRadius: '12px', backgroundColor: '#fff', fontFamily: 'sans-serif', boxShadow: '0 8px 24px rgba(0,0,0,0.08)' }}>
       {isForgotPassword ? (
         <div>
           <h2 style={{ textAlign: 'center', marginBottom: '10px' }}>Reset Password</h2>
           <p style={{ fontSize: '14px', color: '#666', textAlign: 'center', marginBottom: '20px' }}>
-            Enter your email and we'll send you a password reset link.
+            Enter your email and we will send a reset link.
           </p>
 
           <form onSubmit={handleForgotSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
@@ -84,13 +70,13 @@ export const Login = ({ onLoginSuccess }) => {
               value={forgotEmail}
               onChange={(e) => setForgotEmail(e.target.value)}
               required
-              style={{ padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}
+              style={{ padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
             />
 
             <button
               type="submit"
               disabled={loading}
-              style={{ padding: '10px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+              style={{ padding: '10px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
             >
               {loading ? 'Sending Link...' : 'Send Reset Link'}
             </button>
@@ -107,9 +93,8 @@ export const Login = ({ onLoginSuccess }) => {
           </div>
         </div>
       ) : (
-        /* VIEW 2: LOGIN FORM */
         <div>
-          <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>Admin Login</h2>
+          <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>User Management Portal</h2>
 
           <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
             <input
@@ -118,7 +103,7 @@ export const Login = ({ onLoginSuccess }) => {
               value={credentials.email}
               onChange={(e) => setCredentials({ ...credentials, email: e.target.value })}
               required
-              style={{ padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}
+              style={{ padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
             />
 
             <input
@@ -127,8 +112,18 @@ export const Login = ({ onLoginSuccess }) => {
               value={credentials.password}
               onChange={(e) => setCredentials({ ...credentials, password: e.target.value })}
               required
-              style={{ padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}
+              style={{ padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
             />
+
+            <select
+              value={credentials.role}
+              onChange={(e) => setCredentials({ ...credentials, role: e.target.value })}
+              style={{ padding: '10px', borderRadius: '6px', border: '1px solid #ccc' }}
+            >
+              <option value="admin">Admin</option>
+              <option value="manager">Manager</option>
+              <option value="customer">Customer</option>
+            </select>
 
             <div style={{ textAlign: 'right', marginTop: '-5px' }}>
               <button
@@ -143,7 +138,7 @@ export const Login = ({ onLoginSuccess }) => {
             <button
               type="submit"
               disabled={loading}
-              style={{ padding: '10px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+              style={{ padding: '10px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
             >
               {loading ? 'Logging in...' : 'Login'}
             </button>
@@ -151,9 +146,8 @@ export const Login = ({ onLoginSuccess }) => {
         </div>
       )}
 
-      {/* Message Output */}
       {message && (
-        <p style={{ marginTop: '15px', padding: '10px', backgroundColor: '#f3f4f6', borderRadius: '4px', textAlign: 'center', fontSize: '14px', color: '#333' }}>
+        <p style={{ marginTop: '15px', padding: '10px', backgroundColor: '#f3f4f6', borderRadius: '6px', textAlign: 'center', fontSize: '14px', color: '#333' }}>
           {message}
         </p>
       )}

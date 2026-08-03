@@ -1,6 +1,17 @@
+const normalizeRole = (role) => {
+  if (!role) return 'customer';
+  const normalized = String(role).trim().toLowerCase();
+  if (normalized === 'user') return 'customer';
+  return normalized;
+};
+
 export const canRequestPasswordChange = (actorRole, targetRole) => {
-  if (actorRole === 'admin') return true;
-  if (actorRole === 'manager') return targetRole === 'user';
+  const normalizedActorRole = normalizeRole(actorRole);
+  const normalizedTargetRole = normalizeRole(targetRole);
+
+  if (normalizedActorRole === 'admin') return true;
+  if (normalizedActorRole === 'manager') return normalizedTargetRole === 'customer';
+  if (normalizedActorRole === 'customer') return normalizedTargetRole === 'customer';
   return false;
 };
 

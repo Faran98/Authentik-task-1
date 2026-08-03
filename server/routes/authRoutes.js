@@ -26,6 +26,7 @@ router.post('/reset-password/:token', resetPassword);
 router.patch('/users/:userId/reset-password', adminResetUserPassword);
 router.post('/password-change-requests', requestPasswordChange);
 router.get('/password-change-requests', getPasswordChangeRequests);
+router.get('/password-change-requests/:userId/manager', getPasswordChangeRequests);
 router.patch('/password-change-requests/:id/review', reviewPasswordChangeRequest);
 
 // User Management Routes

@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
 import { PasswordChangeRequest } from '../models/PasswordChangeRequest.js';
 import { sendEmail } from '../utils/sendEmail.js';
-import { getUserStatusState } from '../utils/statusHelpers.js';
+import { getUserStatusState, normalizeUserStatus } from '../utils/statusHelpers.js';
 import { validatePassword } from '../utils/passwordValidation.js';
 import { canManageTarget, getVisibleUserRoleFilter, isRoleCreateAllowed } from '../utils/roleAccess.js';
 import { canRequestPasswordChange, normalizeRequestStatus } from '../utils/passwordChangeRequest.js';
@@ -13,9 +13,10 @@ const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, ne
 // 1. Login
 export const login = asyncHandler(async (req, res) => {
   const { email, password, role } = req.body;
+  const requestedRole = String(role || 'customer').trim().toLowerCase();
 
   // Admin Login 
-  if (role === 'admin') {
+  if (requestedRole === 'admin') {
     if (email === process.env.ADMIN_EMAIL && password === process.env.ADMIN_PASSWORD) {
       const token = jwt.sign({ sub: 'admin', role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '1d' });
       return res.status(200).json({
@@ -30,6 +31,10 @@ export const login = asyncHandler(async (req, res) => {
   // User Login 
   const user = await User.findOne({ email }).select('+passwordHash');
   if (!user) return res.status(401).json({ success: false, message: 'Invalid Credentials' });
+
+  if (user.role !== requestedRole) {
+    return res.status(401).json({ success: false, message: 'Role mismatch for this account.' });
+  }
 
   // Soft Delete Check
   if (user.isDeleted) {
@@ -53,8 +58,8 @@ export const login = asyncHandler(async (req, res) => {
 // 2. Create User
 export const createUser = asyncHandler(async (req, res) => {
   const { name, email, password, status, role: requestedRole } = req.body;
-  const actorRole = req.body.actorRole || 'user';
-  const targetRole = requestedRole || 'user';
+  const actorRole = req.body.actorRole || 'customer';
+  const targetRole = requestedRole || 'customer';
 
   if (!isRoleCreateAllowed(actorRole, targetRole)) {
     return res.status(403).json({ success: false, message: 'You are not allowed to create this role.' });
@@ -64,32 +69,32 @@ export const createUser = asyncHandler(async (req, res) => {
   if (existing) return res.status(400).json({ success: false, message: 'User already exists' });
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const { status: normalizedStatus, isDeleted } = getUserStatusState(status);
-  const newUser = await User.create({ name, email, passwordHash, role: targetRole, status: normalizedStatus, isDeleted });
+  const normalizedStatus = normalizeUserStatus(status);
+  const newUser = await User.create({ name, email, passwordHash, role: targetRole, status: normalizedStatus, isDeleted: false });
   res.status(201).json({ success: true, message: 'User created successfully', data: newUser });
 });
 
 // 3. Get Active Users
 export const getActiveUsers = asyncHandler(async (req, res) => {
-  const actorRole = req.query.role || 'user';
+  const actorRole = req.query.role || 'customer';
   const roleFilter = getVisibleUserRoleFilter(actorRole);
   const users = await User.find({ status: 'active', isDeleted: false, role: roleFilter }).lean();
   res.status(200).json({ success: true, data: users });
 });
 
-// 4. Get Soft-Deleted Users (Recycle Bin)
+// 4. Get Inactive Users
 export const getDeletedUsers = asyncHandler(async (req, res) => {
-  const actorRole = req.query.role || 'user';
+  const actorRole = req.query.role || 'customer';
   const roleFilter = getVisibleUserRoleFilter(actorRole);
-  const users = await User.find({ status: 'inactive', isDeleted: true, role: roleFilter }).lean();
+  const users = await User.find({ isDeleted: true, role: roleFilter }).lean();
   res.status(200).json({ success: true, data: users });
 });
 
 // 5. Update User Profile (Triggered by Dashboard Edit Modal)
 export const updateUser = asyncHandler(async (req, res) => {
-  const { name, email, status, role: requestedRole } = req.body;
+  const { name, email, status, role: requestedRole, password } = req.body;
   const targetUser = await User.findById(req.params.id);
-  const actorRole = req.body.actorRole || 'user';
+  const actorRole = req.body.actorRole || 'customer';
 
   if (!targetUser) {
     return res.status(404).json({ success: false, message: 'User not found' });
@@ -106,13 +111,20 @@ export const updateUser = asyncHandler(async (req, res) => {
   const updates = { name, email };
 
   if (typeof status !== 'undefined') {
-    const { status: normalizedStatus, isDeleted } = getUserStatusState(status);
-    updates.status = normalizedStatus;
-    updates.isDeleted = isDeleted;
+    updates.status = normalizeUserStatus(status);
+    updates.isDeleted = false;
   }
 
   if (requestedRole) {
     updates.role = requestedRole;
+  }
+
+  if (typeof password !== 'undefined' && password) {
+    const validation = validatePassword(password);
+    if (!validation.valid) {
+      return res.status(400).json({ success: false, message: validation.message });
+    }
+    updates.passwordHash = await bcrypt.hash(password, 10);
   }
 
   const updated = await User.findByIdAndUpdate(
@@ -131,7 +143,7 @@ export const updateUser = asyncHandler(async (req, res) => {
 // 6. Soft Delete User
 export const softDeleteUser = asyncHandler(async (req, res) => {
   const targetUser = await User.findById(req.params.id);
-  const actorRole = req.body.actorRole || 'user';
+  const actorRole = req.body.actorRole || 'customer';
 
   if (!targetUser) {
     return res.status(404).json({ success: false, message: 'User not found' });
@@ -148,7 +160,7 @@ export const softDeleteUser = asyncHandler(async (req, res) => {
 // 7. Restore User
 export const restoreUser = asyncHandler(async (req, res) => {
   const targetUser = await User.findById(req.params.id);
-  const actorRole = req.body.actorRole || 'user';
+  const actorRole = req.body.actorRole || 'customer';
 
   if (!targetUser) {
     return res.status(404).json({ success: false, message: 'User not found' });
@@ -165,7 +177,7 @@ export const restoreUser = asyncHandler(async (req, res) => {
 // 8. Hard Delete User
 export const hardDeleteUser = asyncHandler(async (req, res) => {
   const targetUser = await User.findById(req.params.id);
-  const actorRole = req.body.actorRole || 'user';
+  const actorRole = req.body.actorRole || 'customer';
 
   if (!targetUser) {
     return res.status(404).json({ success: false, message: 'User not found' });
@@ -187,7 +199,7 @@ export const updateUserStatus = asyncHandler(async (req, res) => {
 
   const updatedUser = await User.findByIdAndUpdate(
     id,
-    { status: nextState.status, isDeleted: nextState.isDeleted },
+    { status: nextState.status, isDeleted: false },
     { new: true }
   );
 
@@ -217,7 +229,7 @@ export const adminResetUserPassword = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'User not found' });
   }
 
-  if (!canManageTarget(actorRole || 'user', user.role)) {
+  if (!canManageTarget(actorRole || 'customer', user.role)) {
     return res.status(403).json({ success: false, message: 'You are not allowed to manage this account.' });
   }
 
@@ -240,7 +252,7 @@ export const requestPasswordChange = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Target user not found' });
   }
 
-  if (!canRequestPasswordChange(actorRole || 'user', targetUser.role)) {
+  if (!canRequestPasswordChange(actorRole || 'customer', targetUser.role)) {
     return res.status(403).json({ success: false, message: 'Managers can only request password changes for regular users.' });
   }
 
@@ -255,8 +267,10 @@ export const requestPasswordChange = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, message: 'Password change request submitted for approval.', data: request });
 });
 
-export const getPasswordChangeRequests = asyncHandler(async (_req, res) => {
-  const requests = await PasswordChangeRequest.find({ status: 'Pending' }).populate('requestedBy', 'name email role').populate('targetUser', 'name email role').lean();
+export const getPasswordChangeRequests = asyncHandler(async (req, res) => {
+  const { userId } = req.params;
+  const query = userId ? { requestedBy: userId } : { status: 'Pending' };
+  const requests = await PasswordChangeRequest.find(query).populate('requestedBy', 'name email role').populate('targetUser', 'name email role').lean();
   res.status(200).json({ success: true, data: requests });
 });
 
