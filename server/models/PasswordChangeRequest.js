@@ -11,4 +11,4 @@ const passwordChangeRequestSchema = new Schema(
   { timestamps: true }
 );
 
-export const PasswordChangeRequest = model('PasswordChangeRequest', passwordChangeRequestSchema);
+export const PasswordChangeRequest = model('PasswordChangeRequest', passwordChangeRequestSchema, 'Approvals');

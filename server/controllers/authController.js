@@ -10,7 +10,7 @@ import { canRequestPasswordChange, normalizeRequestStatus } from '../utils/passw
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-// 1. Login
+// 1. Login (FIXED: Status field inside Auth Response)
 export const login = asyncHandler(async (req, res) => {
   const { email, password, role } = req.body;
   const requestedRole = String(role || 'customer').trim().toLowerCase();
@@ -22,7 +22,7 @@ export const login = asyncHandler(async (req, res) => {
       return res.status(200).json({
         success: true,
         message: 'Admin login successful',
-        data: { token, user: { name: 'System Admin', email, role: 'admin' } },
+        data: { token, user: { name: 'System Admin', email, role: 'admin', status: 'active' } },
       });
     }
     return res.status(401).json({ success: false, message: 'Invalid Admin Credentials' });
@@ -36,11 +36,11 @@ export const login = asyncHandler(async (req, res) => {
     return res.status(401).json({ success: false, message: 'Role mismatch for this account.' });
   }
 
-  // Soft Delete Check
+  // Soft Delete Check (Purged accounts)
   if (user.isDeleted) {
     return res.status(403).json({
       success: false,
-      message: 'Your account has been deactivated. Please contact support.',
+      message: 'Your account has been deleted. Please contact support.',
     });
   }
 
@@ -48,10 +48,22 @@ export const login = asyncHandler(async (req, res) => {
   if (!isMatch) return res.status(401).json({ success: false, message: 'Invalid Credentials' });
 
   const token = jwt.sign({ sub: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1d' });
+  
+  // FIX 2: Return dynamic status (active/inactive) so UI displays exact state upon login
   return res.status(200).json({
     success: true,
     message: 'User login successful',
-    data: { token, user: { id: user._id, name: user.name, email: user.email, role: user.role } },
+    data: { 
+      token, 
+      user: { 
+        id: user._id, 
+        _id: user._id,
+        name: user.name, 
+        email: user.email, 
+        role: user.role,
+        status: user.status || 'active' 
+      } 
+    },
   });
 });
 
@@ -78,19 +90,29 @@ export const createUser = asyncHandler(async (req, res) => {
 export const getActiveUsers = asyncHandler(async (req, res) => {
   const actorRole = req.query.role || 'customer';
   const roleFilter = getVisibleUserRoleFilter(actorRole);
-  const users = await User.find({ status: 'active', isDeleted: false, role: roleFilter }).lean();
+  
+  // Active means status == 'active' and not archived/deleted
+  const query = { status: 'active', isDeleted: false };
+  if (roleFilter) query.role = roleFilter;
+
+  const users = await User.find(query).lean();
   res.status(200).json({ success: true, data: users });
 });
 
-// 4. Get Inactive Users
+// 4. Get Inactive Users (FIX 1: Search by status: 'inactive' instead of isDeleted: true)
 export const getDeletedUsers = asyncHandler(async (req, res) => {
   const actorRole = req.query.role || 'customer';
   const roleFilter = getVisibleUserRoleFilter(actorRole);
-  const users = await User.find({ isDeleted: true, role: roleFilter }).lean();
+
+  // Core Bug Fix: Inactive records rely on status: 'inactive', not isDeleted: true
+  const query = { status: 'inactive', isDeleted: false };
+  if (roleFilter) query.role = roleFilter;
+
+  const users = await User.find(query).lean();
   res.status(200).json({ success: true, data: users });
 });
 
-// 5. Update User Profile (Triggered by Dashboard Edit Modal)
+// 5. Update User Profile (FIX 3: Block editing for inactive users)
 export const updateUser = asyncHandler(async (req, res) => {
   const { name, email, status, role: requestedRole, password } = req.body;
   const targetUser = await User.findById(req.params.id);
@@ -98,6 +120,14 @@ export const updateUser = asyncHandler(async (req, res) => {
 
   if (!targetUser) {
     return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  // FIX 3: Restrict updates if the target user account is inactive (unless strictly updating status to activate)
+  if (targetUser.status === 'inactive' && status !== 'active') {
+    return res.status(403).json({
+      success: false,
+      message: 'Inactive user profile is locked. Please activate the user before updating details.',
+    });
   }
 
   if (!canManageTarget(actorRole, targetUser.role)) {
@@ -108,7 +138,22 @@ export const updateUser = asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: 'You are not allowed to assign this role.' });
   }
 
-  const updates = { name, email };
+  const updates = {};
+
+  if (typeof name !== 'undefined') {
+    updates.name = name;
+  }
+
+  if (typeof email !== 'undefined') {
+    const normalizedEmail = String(email).trim().toLowerCase();
+    if (normalizedEmail !== targetUser.email.toLowerCase()) {
+      const existing = await User.findOne({ email: normalizedEmail });
+      if (existing && existing._id.toString() !== targetUser._id.toString()) {
+        return res.status(400).json({ success: false, message: 'User with this email already exists' });
+      }
+    }
+    updates.email = normalizedEmail;
+  }
 
   if (typeof status !== 'undefined') {
     updates.status = normalizeUserStatus(status);
@@ -133,14 +178,10 @@ export const updateUser = asyncHandler(async (req, res) => {
     { new: true, runValidators: true }
   ).select('-passwordHash');
 
-  if (!updated) {
-    return res.status(404).json({ success: false, message: 'User not found' });
-  }
-
   res.status(200).json({ success: true, message: 'User profile updated', data: updated });
 });
 
-// 6. Soft Delete User
+// 6. Soft Delete (Archive)
 export const softDeleteUser = asyncHandler(async (req, res) => {
   const targetUser = await User.findById(req.params.id);
   const actorRole = req.body.actorRole || 'customer';
@@ -153,8 +194,8 @@ export const softDeleteUser = asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: 'You are not allowed to manage this account.' });
   }
 
-  await User.findByIdAndUpdate(req.params.id, { status: 'inactive', isDeleted: true });
-  res.status(200).json({ success: true, message: 'User soft deleted' });
+  await User.findByIdAndUpdate(req.params.id, { isDeleted: true });
+  res.status(200).json({ success: true, message: 'User archived successfully' });
 });
 
 // 7. Restore User
@@ -191,25 +232,33 @@ export const hardDeleteUser = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: 'User permanently purged' });
 });
 
-// 9. Update User Status Toggle
-export const updateUserStatus = asyncHandler(async (req, res) => {
+// 9. Toggle User Status Handler
+export const toggleUserStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { status, isDeleted } = req.body;
-  const nextState = getUserStatusState(status ?? isDeleted);
+  const actorRole = req.body.actorRole || 'customer';
+  const targetUser = await User.findById(id);
 
-  const updatedUser = await User.findByIdAndUpdate(
-    id,
-    { status: nextState.status, isDeleted: false },
-    { new: true }
-  );
-
-  if (!updatedUser) {
+  if (!targetUser) {
     return res.status(404).json({ success: false, message: 'User not found' });
   }
 
+  if (!canManageTarget(actorRole, targetUser.role)) {
+    return res.status(403).json({ success: false, message: 'You are not allowed to manage this account.' });
+  }
+
+  const requestedStatus = typeof req.body.status !== 'undefined' 
+    ? normalizeUserStatus(req.body.status) 
+    : (targetUser.status === 'active' ? 'inactive' : 'active');
+
+  const updatedUser = await User.findByIdAndUpdate(
+    id, 
+    { status: requestedStatus, isDeleted: false }, 
+    { new: true }
+  ).select('-passwordHash');
+
   res.status(200).json({
     success: true,
-    message: `User status updated to ${nextState.status === 'inactive' ? 'Inactive/Deleted' : 'Active'}`,
+    message: `User status updated to ${requestedStatus === 'inactive' ? 'Inactive' : 'Active'}`,
     data: updatedUser,
   });
 });
